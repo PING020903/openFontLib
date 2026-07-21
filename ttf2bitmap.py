@@ -11,7 +11,6 @@ import sys
 import os
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFont
-import freetype
 
 
 class TTF2Bitmap:
@@ -29,27 +28,34 @@ class TTF2Bitmap:
     MAGIC = b'FONT'
     VERSION = 1
     
-    def __init__(self, ttf_path, font_size=16):
+    def __init__(self, ttf_path, font_size=16, font_number=0):
         """
         初始化转换器
         
         Args:
-            ttf_path: TTF字体文件路径
+            ttf_path: TTF/TTC字体文件路径
             font_size: 字号大小（像素）
+            font_number: TTC集合中的字体编号
         """
         self.ttf_path = ttf_path
         self.font_size = font_size
+        self.font_number = font_number
         self.font = None
+        self.pil_font = None
         self.cmap = None
         self.char_data = []  # [(unicode, bitmap_data)]
         
     def load_font(self):
-        """加载TTF字体"""
+        """加载TTF/TTC字体"""
         print(f"加载字体: {self.ttf_path}")
         
-        # 使用fontTools加载字体
-        self.font = TTFont(self.ttf_path)
+        if self.ttf_path.lower().endswith('.ttc'):
+            self.font = TTFont(self.ttf_path, fontNumber=self.font_number)
+        else:
+            self.font = TTFont(self.ttf_path)
         self.cmap = self.font.getBestCmap()
+        
+        self.pil_font = ImageFont.truetype(self.ttf_path, self.font_size, index=self.font_number)
         
         print(f"字体加载成功，共 {len(self.cmap)} 个字符")
         
@@ -78,32 +84,25 @@ class TTF2Bitmap:
             height: 字符高度
         """
         try:
-            # 使用freetype-py渲染字符
-            face = freetype.Face(self.ttf_path)
-            face.set_pixel_sizes(0, self.font_size)
+            char = chr(char_code)
+            bbox = self.pil_font.getbbox(char)
             
-            # 加载字符
-            face.load_char(chr(char_code), freetype.FT_LOAD_RENDER)
-            
-            # 获取位图
-            bitmap = face.glyph.bitmap
-            
-            width = bitmap.width
-            height = bitmap.rows
-            
-            if width == 0 or height == 0:
-                # 空字符
+            if not bbox or (bbox[2] - bbox[0] == 0 and bbox[3] - bbox[1] == 0):
                 return b'\x00' * ((self.font_size + 7) // 8 * self.font_size), self.font_size, self.font_size
             
-            # 将位图转换为二值化数据
+            width = self.font_size
+            height = self.font_size
+            
+            img = Image.new('L', (width, height), 0)
+            draw = ImageDraw.Draw(img)
+            draw.text((0, 0), char, font=self.pil_font, fill=255)
+            
             bitmap_data = []
             for y in range(height):
                 byte_val = 0
                 bit_count = 0
                 for x in range(width):
-                    # 获取像素值（0-255）
-                    pixel = bitmap.buffer[y * width + x]
-                    # 二值化（阈值128）
+                    pixel = img.getpixel((x, y))
                     if pixel > 128:
                         byte_val |= (1 << (7 - bit_count))
                     bit_count += 1
@@ -113,7 +112,6 @@ class TTF2Bitmap:
                         byte_val = 0
                         bit_count = 0
                 
-                # 处理剩余的位
                 if bit_count > 0:
                     bitmap_data.append(byte_val)
             
@@ -121,7 +119,6 @@ class TTF2Bitmap:
             
         except Exception as e:
             print(f"渲染字符 {hex(char_code)} 失败: {e}")
-            # 返回空白位图
             return b'\x00' * ((self.font_size + 7) // 8 * self.font_size), self.font_size, self.font_size
     
     def convert(self, output_path, char_filter=None):
@@ -289,13 +286,15 @@ def read_bitmap_from_bin(bin_path, unicode_code):
 def main():
     """主函数"""
     if len(sys.argv) < 3:
-        print("用法: python ttf2bitmap.py <输入TTF文件> <输出BIN文件> [字号]")
+        print("用法: python ttf2bitmap.py <输入TTF/TTC文件> <输出BIN文件> [字号] [字体编号]")
         print("示例: python ttf2bitmap.py font.ttf font.bin 16")
+        print("      python ttf2bitmap.py font.ttc font.bin 16 0")
         return
     
     input_file = sys.argv[1]
     output_file = sys.argv[2]
     font_size = int(sys.argv[3]) if len(sys.argv) > 3 else 16
+    font_number = int(sys.argv[4]) if len(sys.argv) > 4 else 0
     
     # 检查输入文件
     if not os.path.exists(input_file):
@@ -303,7 +302,7 @@ def main():
         return
     
     # 创建转换器并执行转换
-    converter = TTF2Bitmap(input_file, font_size)
+    converter = TTF2Bitmap(input_file, font_size, font_number)
     converter.load_font()
     converter.convert(output_file)
     
