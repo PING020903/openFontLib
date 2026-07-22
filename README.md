@@ -5,19 +5,23 @@
 ## 功能特性
 
 - 支持 GB18030 字符集（简体/繁体中文、日韩汉字、ASCII）
-- 两种字号：16px 和 32px
+- 三种字号：16px、24px、32px
 - UTF-8 编码索引，支持变长字符
+- 索引按 Unicode 码点升序排列，支持二分查找（O(log n)）
+- 字形渲染自动居中，避免笔画裁切
 - 横置横排点阵格式，适合 LCD/OLED 显示
 
 ## 文件说明
 
 | 文件 | 说明 |
 |------|------|
-| font_16.bin | 16px 点阵字库（27,619 字符） |
-| font_32.bin | 32px 点阵字库（27,579 字符） |
-| font.ttf | 源字体文件（文泉驿点阵宋体） |
-| ttf2bitmap.py | TTF 转点阵工具 |
-| read_font.c | C 语言读取示例 |
+| font16.bin | 16px 点阵字库（27,680 字符） |
+| font24.bin | 24px 点阵字库 |
+| font32.bin | 32px 点阵字库 |
+| font.ttf / simsun.ttc | 源字体文件 |
+| ttf2bitmap.py | TTF 转点阵工具（输出按码点升序） |
+| read_font.c | C 语言读取示例（二分查找） |
+| verify_bitmap.py | 字库校验工具 |
 
 ## 字库文件格式
 
@@ -42,10 +46,10 @@
 ```c
 #include "read_font.h"
 
-// 打开字库
-FontFile *font = font_open("font_16.bin");
+// 打开字库（加载索引后自动按码点排序）
+FontFile *font = font_open("font16.bin");
 
-// 查找字符（Unicode 码点）
+// 二分查找字符（Unicode 码点），O(log n)
 const FontIndex *ch = font_find_char(font, 0x4E2D);  // '中'
 
 // 读取点阵数据
@@ -93,11 +97,14 @@ pip install fonttools freetype-py pillow
 ### 转换命令
 
 ```bash
-# 生成 16px 字库
+# 生成 16px 字库（TTF）
 python ttf2bitmap.py your_font.ttf output_16.bin 16
 
 # 生成 32px 字库
 python ttf2bitmap.py your_font.ttf output_32.bin 32
+
+# TTC 集合字体，第4个参数指定字体编号（默认0）
+python ttf2bitmap.py simsun.ttc output_16.bin 16 0
 ```
 
 ### 推荐字体
@@ -111,9 +118,29 @@ python ttf2bitmap.py your_font.ttf output_32.bin 32
 ## 编译示例程序
 
 ```bash
-gcc read_font.c -o read_font
-./read_font font_16.bin
+gcc -O2 read_font.c -o read_font
+./read_font font16.bin
 ```
+
+## 字库验证
+
+```bash
+# 验证默认文件（font16/24/32.bin）
+python verify_bitmap.py
+
+# 验证指定文件
+python verify_bitmap.py font16.bin font32.bin
+```
+
+验证项目：
+- 文件头：魔数（`FONT`）、版本号、字符数量、字号合法性
+- 索引有效性：Unicode 码点非空、无重复、offset 不越界
+- 排序校验：索引条目按 Unicode 码点严格升序
+- 可视化抽样：随机字符点阵 ASCII 渲染（含 U+9EDE "點"）
+
+## 索引排序说明
+
+`ttf2bitmap.py` 输出时按 Unicode 码点**升序**排列索引条目，嵌入式端可直接二分查找，无需额外排序或 idx 辅助文件。`read_font.c` 示例加载后额外执行 `qsort` 以兼容旧版未排序字库。
 
 ## 许可证
 

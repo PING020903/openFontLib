@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 /* ========== 文件格式定义 ========== */
 
@@ -80,6 +81,17 @@ int utf8_encode(uint32_t unicode, uint8_t *buf) {
 /* ========== 字库文件操作 ========== */
 
 /**
+ * 索引排序比较函数（按Unicode码点升序）
+ */
+static int index_cmp(const void *a, const void *b) {
+    const FontIndex *ia = (const FontIndex*)a;
+    const FontIndex *ib = (const FontIndex*)b;
+    if (ia->unicode < ib->unicode) return -1;
+    if (ia->unicode > ib->unicode) return 1;
+    return 0;
+}
+
+/**
  * 打开字库文件并加载索引
  */
 FontFile* font_open(const char *path) {
@@ -92,17 +104,14 @@ FontFile* font_open(const char *path) {
         return NULL;
     }
     
-    // 读取文件头
     fread(&font->header, sizeof(FontHeader), 1, font->fp);
     
-    // 验证魔数
     if (memcmp(font->header.magic, "FONT", 4) != 0) {
         fclose(font->fp);
         free(font);
         return NULL;
     }
     
-    // 读取索引表
     font->index_count = font->header.char_count;
     font->index = (FontIndex*)calloc(font->index_count, sizeof(FontIndex));
     
@@ -118,6 +127,8 @@ FontFile* font_open(const char *path) {
         fread(&font->index[i].width, 2, 1, font->fp);
         fread(&font->index[i].height, 2, 1, font->fp);
     }
+    
+    qsort(font->index, font->index_count, sizeof(FontIndex), index_cmp);
     
     return font;
 }
@@ -145,13 +156,26 @@ void font_print_info(const FontFile *font) {
 }
 
 /**
- * 根据Unicode码点查找字符索引
+ * 根据Unicode码点二分查找字符索引
+ * 索引表已按码点升序排列
  * 找到返回索引指针，未找到返回NULL
  */
 const FontIndex* font_find_char(const FontFile *font, uint32_t unicode) {
-    for (uint32_t i = 0; i < font->index_count; i++) {
-        if (font->index[i].unicode == unicode) {
-            return &font->index[i];
+    if (font->index_count == 0) return NULL;
+    
+    int lo = 0;
+    int hi = (int)font->index_count - 1;
+    
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        uint32_t cp = font->index[mid].unicode;
+        
+        if (cp == unicode) {
+            return &font->index[mid];
+        } else if (cp < unicode) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
         }
     }
     return NULL;
@@ -258,6 +282,7 @@ int main(int argc, char *argv[]) {
     printf("===== 字符显示示例 =====\n\n");
     
     uint32_t test_chars[] = {
+        0x9EDE,  // 點（plan.md 中提到的 fallback 字符）
         // 简体字
         0x4E2D,  // 中
         0x56FD,  // 国

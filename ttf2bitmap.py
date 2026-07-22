@@ -95,7 +95,12 @@ class TTF2Bitmap:
             
             img = Image.new('L', (width, height), 0)
             draw = ImageDraw.Draw(img)
-            draw.text((0, 0), char, font=self.pil_font, fill=255)
+            
+            gw = bbox[2] - bbox[0]
+            gh = bbox[3] - bbox[1]
+            x_offset = (width - gw) // 2 - bbox[0]
+            y_offset = (height - gh) // 2 - bbox[1]
+            draw.text((x_offset, y_offset), char, font=self.pil_font, fill=255)
             
             bitmap_data = []
             for y in range(height):
@@ -137,6 +142,8 @@ class TTF2Bitmap:
         if char_filter:
             chars = [c for c in chars if char_filter(c)]
             print(f"过滤后剩余 {len(chars)} 个字符")
+        
+        chars.sort()
         
         # 渲染每个字符
         self.char_data = []

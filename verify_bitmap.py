@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import struct, os
+import struct, os, sys
 
 def utf8_to_unicode(utf8_bytes):
     if len(utf8_bytes) == 1: return utf8_bytes[0]
@@ -24,6 +24,55 @@ def read_bin(p):
             idx.append({"code": utf8_to_unicode(ub), "offset": o, "w": w, "h": ht})
         return h, idx
 
+def verify_header(h, file_size):
+    errors = []
+    if h["magic"] != b"FONT":
+        errors.append(f"魔数错误: {h['magic']!r}, 期望 b'FONT'")
+    if h["version"] != 1:
+        errors.append(f"版本未知: {h['version']}, 期望 1")
+    if h["char_count"] == 0:
+        errors.append("字符数量为 0")
+    if h["font_size"] not in (8, 12, 16, 24, 32, 48):
+        errors.append(f"字号异常: {h['font_size']}")
+    return errors
+
+def verify_index(idx, h):
+    errors = []
+    codes = [e["code"] for e in idx]
+
+    if len(idx) == 0:
+        errors.append("索引表为空")
+        return errors
+
+    invalid = [e for e in idx if e["code"] is None or e["code"] == 0]
+    if invalid:
+        errors.append(f"存在 {len(invalid)} 个无效 Unicode 码点 (0/None)")
+
+    dup_count = len(codes) - len(set(codes))
+    if dup_count > 0:
+        errors.append(f"存在 {dup_count} 个重复码点")
+
+    unsorted = 0
+    first_bad = None
+    for i in range(1, len(codes)):
+        if codes[i] < codes[i - 1]:
+            unsorted += 1
+            if first_bad is None:
+                first_bad = (i, codes[i - 1], codes[i])
+    if unsorted > 0:
+        i, prev, cur = first_bad
+        errors.append(
+            f"索引未按码点升序排列: {unsorted} 处逆序, "
+            f"首个: idx[{i-1}] U+{prev:04X} > idx[{i}] U+{cur:04X}"
+        )
+
+    data_start = 16 + sum(1 + (4 if e["code"] > 0xFFFF else 3 if e["code"] > 0x7FF else 2 if e["code"] > 0x7F else 1) + 8 for e in idx)
+    bad_offset = [e for e in idx if e["offset"] < data_start]
+    if bad_offset:
+        errors.append(f"{len(bad_offset)} 个条目 offset 指向索引区 (< {data_start})")
+
+    return errors
+
 def vis(p, e):
     with open(p, "rb") as f:
         f.seek(e["offset"])
@@ -42,36 +91,56 @@ def vis(p, e):
         lines.append(ln)
     return "\n".join(lines)
 
-print("=" * 60)
-print("           字库文件验证工具")
-print("=" * 60)
+def main():
+    targets = sys.argv[1:] if len(sys.argv) > 1 else ["font16.bin", "font24.bin", "font32.bin"]
+    all_pass = True
 
-for bp in ["font_16.bin", "font_32.bin"]:
-    print("\n" + "=" * 60)
-    print("文件: " + bp)
     print("=" * 60)
-    if not os.path.exists(bp):
-        print("  文件不存在!")
-        continue
-    fs = os.path.getsize(bp)
-    print("  文件大小: {} 字节 ({:.1f} KB)".format(fs, fs / 1024))
-    h, idx = read_bin(bp)
-    print("  魔数: {} {}".format(h["magic"], "OK" if h["magic"] == b"FONT" else "ERR"))
-    print("  版本: {}".format(h["version"]))
-    print("  字符数量: {}".format(h["char_count"]))
-    print("  字号: {}px".format(h["font_size"]))
-    codes = set(e["code"] for e in idx)
-    print("  唯一字符数: {}".format(len(codes)))
-    print("  编码唯一: {}".format("OK" if len(codes) == len(idx) else "ERR"))
-    print("\n  可视化抽样:")
-    for cd in [0x4E2D, 0x56FD, 0x0041]:
-        e = next((x for x in idx if x["code"] == cd), None)
-        if e:
-            print("    U+{:04X}({}) [{}x{}]:".format(cd, chr(cd), e["w"], e["h"]))
-            art = vis(bp, e)
-            for line in art.split("\n"):
-                print("      " + line)
+    print("           字库文件验证工具")
+    print("=" * 60)
 
-print("\n" + "=" * 60)
-print("验证完成")
-print("=" * 60)
+    for bp in targets:
+        print(f"\n{'=' * 60}")
+        print(f"文件: {bp}")
+        print("=" * 60)
+        if not os.path.exists(bp):
+            print("  [SKIP] 文件不存在")
+            continue
+
+        fs = os.path.getsize(bp)
+        print(f"  文件大小: {fs} 字节 ({fs/1024:.1f} KB)")
+
+        h, idx = read_bin(bp)
+
+        print(f"  魔数: {h['magic']!r}")
+        print(f"  版本: {h['version']}")
+        print(f"  字符数量: {h['char_count']}")
+        print(f"  字号: {h['font_size']}px")
+
+        errors = verify_header(h, fs)
+        errors += verify_index(idx, h)
+
+        if errors:
+            all_pass = False
+            print(f"\n  [FAIL] 发现 {len(errors)} 个问题:")
+            for e in errors:
+                print(f"    ✗ {e}")
+        else:
+            print("\n  [PASS] 头部正确, 索引有效, 码点升序")
+
+        print("\n  可视化抽样:")
+        for cd in [0x9EDE, 0x4E2D, 0x56FD, 0x0041]:
+            e = next((x for x in idx if x["code"] == cd), None)
+            if e:
+                print(f"    U+{cd:04X}({chr(cd)}) [{e['w']}x{e['h']}]:")
+                art = vis(bp, e)
+                for line in art.split("\n"):
+                    print("      " + line)
+
+    print(f"\n{'=' * 60}")
+    print("验证完成: " + ("ALL PASS" if all_pass else "HAS ERRORS"))
+    print("=" * 60)
+    return 0 if all_pass else 1
+
+if __name__ == "__main__":
+    sys.exit(main())
